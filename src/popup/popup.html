@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Context Pack</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <span class="icon">📦</span>
+        <h1>Context Pack</h1>
+      </div>
+      <div class="nav-tabs">
+        <button class="tab-btn active" data-tab="packs">Paketler</button>
+        <button class="tab-btn" data-tab="settings">Ayarlar</button>
+      </div>
+    </header>
+
+    <!-- User / Auth Banner -->
+    <div id="auth-banner" class="auth-banner unauth">
+      <span id="auth-status-text">Giriş yapılmadı</span>
+    </div>
+
+    <!-- TAB 1: Packs List -->
+    <section id="tab-packs" class="tab-pane active">
+      <div class="search-bar">
+        <input type="text" id="pack-search" placeholder="Paketlerde ara..." />
+      </div>
+      <div id="packs-container" class="packs-container">
+        <div class="loading-state">Yükleniyor...</div>
+      </div>
+    </section>
+
+    <!-- TAB 2: Settings & Auth -->
+    <section id="tab-settings" class="tab-pane">
+      <div class="section-card">
+        <h3>⚡ Supabase Yapılandırması</h3>
+        <p class="subtitle">Verilerin senkronize edileceği Supabase projeniz</p>
+        
+        <label for="cfg-url">Supabase Project URL</label>
+        <input type="text" id="cfg-url" placeholder="https://xyz.supabase.co" />
+
+        <label for="cfg-key">Supabase Anon Key</label>
+        <input type="password" id="cfg-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5..." />
+
+        <button id="btn-save-config" class="btn primary">Yapılandırmayı Kaydet</button>
+      </div>
+
+      <div class="section-card" id="auth-card">
+        <h3>🔐 Kullanıcı Girişi (RLS)</h3>
+        <p class="subtitle">Her kullanıcı sadece kendi paketlerine erişebilir</p>
+
+        <div id="login-form">
+          <label for="auth-email">E-posta</label>
+          <input type="email" id="auth-email" placeholder="ornek@alanadi.com" />
+
+          <label for="auth-password">Şifre</label>
+          <input type="password" id="auth-password" placeholder="••••••••" />
+
+          <div class="btn-group">
+            <button id="btn-login" class="btn primary">Giriş Yap</button>
+            <button id="btn-signup" class="btn secondary">Kayıt Ol</button>
+          </div>
+        </div>
+
+        <div id="logout-form" style="display: none;">
+          <p class="user-info">Giriş yapıldı: <strong id="user-email"></strong></p>
+          <button id="btn-logout" class="btn danger">Çıkış Yap</button>
+        </div>
+      </div>
+
+      <div class="info-footer">
+        <p>💡 <em>Claude, ChatGPT veya Gemini sekmelerinde sağ alttaki butonları kullanarak tek tıkla bağlam aktarabilirsiniz.</em></p>
+      </div>
+    </section>
+
+    <!-- Toast Notification -->
+    <div id="popup-toast" class="popup-toast"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

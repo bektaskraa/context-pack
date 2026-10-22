@@ -1,0 +1,31 @@
+{
+  "name": "context-pack-extension",
+  "version": "1.0.0",
+  "description": "Cross-Model AI Context Sync Chrome Extension with Supabase",
+  "main": "dist/background.js",
+  "scripts": {
+    "icons": "node scripts/generate-icons.js",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/generate-icons.js && node build.js",
+    "watch": "node build.js --watch"
+  },
+  "keywords": [
+    "chrome-extension",
+    "manifest-v3",
+    "ai",
+    "claude",
+    "chatgpt",
+    "gemini",
+    "supabase"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/chrome": "^0.0.308",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1"
+  }
+}
