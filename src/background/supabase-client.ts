@@ -31,6 +31,22 @@ const chromeStorageAdapter: SupportedStorage = {
 let cachedClient: SupabaseClient | null = null;
 let currentConfig = { url: '', anonKey: '' };
 
+export function sanitizeSupabaseUrl(inputUrl: string): string {
+  let cleaned = inputUrl.trim().replace(/^["']|["']$/g, '');
+  const dashboardMatch = cleaned.match(/supabase\.com\/dashboard\/project\/([a-zA-Z0-9_-]+)/);
+  if (dashboardMatch) {
+    return `https://${dashboardMatch[1]}.supabase.co`;
+  }
+  if (cleaned && !cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+    cleaned = 'https://' + cleaned;
+  }
+  return cleaned.replace(/\/+$/, '');
+}
+
+export function sanitizeSupabaseKey(inputKey: string): string {
+  return inputKey.trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+}
+
 export async function getSupabaseClient(): Promise<SupabaseClient | null> {
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.SUPABASE_URL,
@@ -39,8 +55,8 @@ export async function getSupabaseClient(): Promise<SupabaseClient | null> {
 
   const rawUrl = stored[STORAGE_KEYS.SUPABASE_URL];
   const rawKey = stored[STORAGE_KEYS.SUPABASE_ANON_KEY];
-  const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
-  const anonKey = typeof rawKey === 'string' ? rawKey.trim() : '';
+  const url = sanitizeSupabaseUrl(typeof rawUrl === 'string' ? rawUrl : '');
+  const anonKey = sanitizeSupabaseKey(typeof rawKey === 'string' ? rawKey : '');
 
   if (!url || !anonKey) {
     return null;

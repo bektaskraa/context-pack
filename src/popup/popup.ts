@@ -179,12 +179,27 @@ function bindActions(): void {
   document.getElementById('btn-save-config')?.addEventListener('click', async () => {
     const urlInput = document.getElementById('cfg-url') as HTMLInputElement | null;
     const keyInput = document.getElementById('cfg-key') as HTMLInputElement | null;
-    const url = urlInput?.value.trim() || '';
-    const anonKey = keyInput?.value.trim() || '';
+    let url = urlInput?.value.trim() || '';
+    let anonKey = keyInput?.value.trim() || '';
+
+    // Auto fix if user pasted dashboard URL: https://supabase.com/dashboard/project/<ref>
+    const dashboardMatch = url.match(/supabase\.com\/dashboard\/project\/([a-zA-Z0-9_-]+)/);
+    if (dashboardMatch) {
+      url = `https://${dashboardMatch[1]}.supabase.co`;
+    }
+    url = url.replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+    anonKey = anonKey.replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+
+    if (urlInput) urlInput.value = url;
+    if (keyInput) keyInput.value = anonKey;
 
     if (!url || !anonKey) {
       toast('Lütfen URL ve Anon Key alanlarını doldurun.', 'warning');
       return;
+    }
+
+    if (anonKey.length < 50 && !anonKey.startsWith('sb_')) {
+      toast('⚠️ Anon Key çok kısa! (Project Settings > API > anon public anahtarını kopyalayın)', 'warning');
     }
 
     const res: any = await chrome.runtime.sendMessage({
