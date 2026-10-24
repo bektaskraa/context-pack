@@ -371,7 +371,17 @@ export class ContextPackWidget {
   private handlePack(): void {
     const input = this.adapter.getInputBox();
     if (!input) {
-      this.toast('Prompt kutusu bulunamadı!', 'error');
+      // Konsola debug bilgisi yaz
+      console.warn('[ContextPack] Input box not found. Debugging selectors...');
+      if ('debugSelectors' in this.adapter && typeof (this.adapter as any).debugSelectors === 'function') {
+        (this.adapter as any).debugSelectors();
+      }
+      const allEditables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+      const allTextareas = Array.from(document.querySelectorAll('textarea'));
+      console.warn('[ContextPack] contenteditable elements:', allEditables);
+      console.warn('[ContextPack] textarea elements:', allTextareas);
+
+      this.toast('⚠️ Prompt kutusu bulunamadı. Sayfanın tam yüklenip yüklenmediğini kontrol edin.', 'error');
       return;
     }
 
