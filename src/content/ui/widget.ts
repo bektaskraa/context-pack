@@ -11,6 +11,8 @@ export class ContextPackWidget {
   private shadow: ShadowRoot | null = null;
   private adapter: IPlatformAdapter;
   private isAwaitingSummary = false;
+  private isAutoSaveActive = true;
+  private autoSaveToggleCallback: ((enabled: boolean) => void) | null = null;
 
   constructor(adapter: IPlatformAdapter) {
     this.adapter = adapter;
@@ -119,6 +121,22 @@ export class ContextPackWidget {
 
         .cp-btn-load:hover {
           background: #e5e7eb;
+        }
+
+        .cp-btn-auto {
+          background: #f3f4f6;
+          color: #6b7280;
+          border: 1px solid #e5e7eb;
+        }
+
+        .cp-btn-auto.active {
+          background: #ecfdf5;
+          color: #059669;
+          border: 1px solid #a7f3d0;
+        }
+
+        .cp-btn-auto.active:hover {
+          background: #d1fae5;
         }
 
         .cp-toast {
@@ -341,6 +359,9 @@ export class ContextPackWidget {
       </style>
 
       <div class="cp-bar">
+        <button class="cp-btn cp-btn-auto active" id="cp-btn-auto" title="Otomatik kaydetme açık (tıklayarak kapatın)">
+          🤖 Auto: Açık
+        </button>
         <button class="cp-btn cp-btn-pack" id="cp-btn-pack" title="Özetleme şablonunu prompt kutusuna yazar">
           📦 Paketle
         </button>
@@ -359,9 +380,20 @@ export class ContextPackWidget {
   private bindEvents(): void {
     if (!this.shadow) return;
 
+    const autoBtn = this.shadow.getElementById('cp-btn-auto');
     const packBtn = this.shadow.getElementById('cp-btn-pack');
     const saveBtn = this.shadow.getElementById('cp-btn-save');
     const loadBtn = this.shadow.getElementById('cp-btn-load');
+
+    autoBtn?.addEventListener('click', () => {
+      this.isAutoSaveActive = !this.isAutoSaveActive;
+      this.updateAutoSaveButtonUI();
+      this.autoSaveToggleCallback?.(this.isAutoSaveActive);
+      this.toast(
+        this.isAutoSaveActive ? '🤖 Otomatik kaydetme aktif' : '⏸️ Otomatik kaydetme duraklatıldı',
+        'warning'
+      );
+    });
 
     packBtn?.addEventListener('click', () => this.handlePack());
     saveBtn?.addEventListener('click', () => this.handleSave());
@@ -523,6 +555,29 @@ export class ContextPackWidget {
     setTimeout(() => {
       toastEl.classList.remove('visible');
     }, 4000);
+  }
+
+  public setAutoSaveState(enabled: boolean): void {
+    this.isAutoSaveActive = enabled;
+    this.updateAutoSaveButtonUI();
+  }
+
+  public onAutoSaveToggle(cb: (enabled: boolean) => void): void {
+    this.autoSaveToggleCallback = cb;
+  }
+
+  private updateAutoSaveButtonUI(): void {
+    const autoBtn = this.shadow?.getElementById('cp-btn-auto');
+    if (!autoBtn) return;
+    if (this.isAutoSaveActive) {
+      autoBtn.classList.add('active');
+      autoBtn.textContent = '🤖 Auto: Açık';
+      autoBtn.title = 'Otomatik kaydetme açık (tıklayarak kapatın)';
+    } else {
+      autoBtn.classList.remove('active');
+      autoBtn.textContent = '🤖 Auto: Kapalı';
+      autoBtn.title = 'Otomatik kaydetme kapalı (tıklayarak açın)';
+    }
   }
 
   private setupKeepAlive(): void {
