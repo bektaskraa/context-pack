@@ -15,6 +15,7 @@ export class ContextPackWidget {
   private autoSaveToggleCallback: ((enabled: boolean) => void) | null = null;
   private currentLinkedPack: { packId: string; title: string; version?: number } | null = null;
   private linkChangeCallback: ((link: { packId: string; title: string; version?: number } | null) => void) | null = null;
+  private isCollapsed = false;
 
   constructor(adapter: IPlatformAdapter) {
     this.adapter = adapter;
@@ -41,6 +42,14 @@ export class ContextPackWidget {
     this.render();
     this.bindEvents();
     this.setupKeepAlive();
+
+    // Load persisted collapse state
+    chrome.storage.local.get(['cp_widget_collapsed'], (res) => {
+      if (res && typeof res['cp_widget_collapsed'] === 'boolean') {
+        this.isCollapsed = res['cp_widget_collapsed'];
+        this.updateCollapseStateUI();
+      }
+    });
   }
 
   private render(): void {
@@ -163,6 +172,65 @@ export class ContextPackWidget {
 
         .cp-btn-link-badge.linked:hover {
           background: #dbeafe;
+        }
+
+        .cp-btn-collapse {
+          background: transparent;
+          color: #9ca3af;
+          border: none;
+          padding: 4px 6px;
+          border-radius: 50%;
+          font-size: 11px;
+          line-height: 1;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          margin-left: 2px;
+        }
+
+        .cp-btn-collapse:hover {
+          background: #f3f4f6;
+          color: #4b5563;
+        }
+
+        .cp-fab {
+          pointer-events: auto;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.98);
+          backdrop-filter: blur(12px);
+          border: 1px solid rgba(229, 231, 235, 0.9);
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+          cursor: pointer;
+          font-size: 20px;
+          transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s;
+          position: relative;
+          user-select: none;
+          outline: none;
+        }
+
+        .cp-fab:hover {
+          transform: translateY(-2px) scale(1.08);
+          box-shadow: 0 14px 28px -5px rgba(0, 0, 0, 0.2);
+        }
+
+        .cp-fab:active {
+          transform: scale(0.95);
+        }
+
+        @keyframes cp-fab-bounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-8px) scale(1.15); }
+        }
+
+        .cp-fab.bounce {
+          animation: cp-fab-bounce 0.6s ease;
         }
 
         .cp-toast {
@@ -415,7 +483,7 @@ export class ContextPackWidget {
         }
       </style>
 
-      <div class="cp-bar">
+      <div class="cp-bar" id="cp-bar">
         <button class="cp-btn cp-btn-link-badge" id="cp-btn-link-badge" title="Sohbet bağlantısı (değiştirmek veya bağlamak için tıklayın)">
           ➕ Bağsız Sohbet
         </button>
@@ -431,7 +499,14 @@ export class ContextPackWidget {
         <button class="cp-btn cp-btn-load" id="cp-btn-load" title="Başka modellerden kaydedilmiş bağlamları yükler">
           📥 Context Yükle
         </button>
+        <button class="cp-btn cp-btn-collapse" id="cp-btn-collapse" title="Widget'ı küçült (Gizle)">
+          ✕
+        </button>
       </div>
+
+      <button class="cp-fab" id="cp-fab" title="Context Pack'i aç">
+        <span class="cp-fab-icon">📦</span>
+      </button>
 
       <div class="cp-toast" id="cp-toast"></div>
     `;
@@ -445,6 +520,18 @@ export class ContextPackWidget {
     const packBtn = this.shadow.getElementById('cp-btn-pack');
     const saveBtn = this.shadow.getElementById('cp-btn-save');
     const loadBtn = this.shadow.getElementById('cp-btn-load');
+    const collapseBtn = this.shadow.getElementById('cp-btn-collapse');
+    const fabBtn = this.shadow.getElementById('cp-fab');
+
+    collapseBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setCollapsed(true);
+    });
+
+    fabBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setCollapsed(false);
+    });
 
     linkBadgeBtn?.addEventListener('click', () => this.handleLoad());
 
@@ -637,14 +724,52 @@ export class ContextPackWidget {
     toastEl.textContent = message;
     toastEl.className = `cp-toast ${type} visible`;
 
+    // Bounce FAB if collapsed
+    const fabEl = this.shadow.getElementById('cp-fab');
+    if (fabEl && this.isCollapsed) {
+      fabEl.classList.remove('bounce');
+      void fabEl.offsetWidth; // trigger reflow
+      fabEl.classList.add('bounce');
+    }
+
     setTimeout(() => {
       toastEl.classList.remove('visible');
     }, 4000);
   }
 
+  public setCollapsed(collapsed: boolean): void {
+    this.isCollapsed = collapsed;
+    this.updateCollapseStateUI();
+    chrome.storage.local.set({ cp_widget_collapsed: collapsed });
+  }
+
+  public isWidgetCollapsed(): boolean {
+    return this.isCollapsed;
+  }
+
+  public updateCollapseStateUI(): void {
+    const bar = this.shadow?.getElementById('cp-bar');
+    const fab = this.shadow?.getElementById('cp-fab');
+    if (!bar || !fab) return;
+
+    if (this.isCollapsed) {
+      bar.style.display = 'none';
+      fab.style.display = 'inline-flex';
+      if (this.currentLinkedPack) {
+        fab.title = `Context Pack (Bağlı: "${this.currentLinkedPack.title}") - Tıklayarak açın`;
+      } else {
+        fab.title = 'Context Pack - Tıklayarak açın';
+      }
+    } else {
+      bar.style.display = 'flex';
+      fab.style.display = 'none';
+    }
+  }
+
   public setAutoSaveState(enabled: boolean): void {
     this.isAutoSaveActive = enabled;
     this.updateAutoSaveButtonUI();
+    this.updateCollapseStateUI();
   }
 
   public onAutoSaveToggle(cb: (enabled: boolean) => void): void {
@@ -654,6 +779,7 @@ export class ContextPackWidget {
   public setLinkedPack(link: { packId: string; title: string; version?: number } | null): void {
     this.currentLinkedPack = link;
     this.updateLinkBadgeUI();
+    this.updateCollapseStateUI();
   }
 
   public onLinkChange(cb: (link: { packId: string; title: string; version?: number } | null) => void): void {

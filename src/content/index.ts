@@ -59,13 +59,17 @@ function init(): void {
     childList: true,
   });
 
-  // 3. Quick Keyboard Shortcut (Alt + C or Cmd + Shift + C) to open Load modal
+  // 3. Quick Keyboard Shortcuts
+  // Alt + C: Open Load modal
+  // Alt + W: Toggle Widget collapse/expand
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     if ((e.altKey && e.code === 'KeyC') || (e.metaKey && e.shiftKey && e.code === 'KeyC')) {
       const loadBtn = document
         .getElementById(hostId)
         ?.shadowRoot?.getElementById('cp-btn-load') as HTMLButtonElement | null;
       loadBtn?.click();
+    } else if ((e.altKey && e.code === 'KeyW') || (e.metaKey && e.shiftKey && e.code === 'KeyW')) {
+      widget.setCollapsed(!widget.isWidgetCollapsed());
     }
   });
 }
