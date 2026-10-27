@@ -9,6 +9,7 @@ export interface SaveQueueItem {
   pack: ContextPackData;
   contentHash: string;
   metadata?: Record<string, unknown>;
+  packId?: string;
 }
 
 export class AutoSaveManager {
@@ -62,6 +63,7 @@ export class AutoSaveManager {
             externalChatId: item.externalChatId,
             title: item.title,
             pack: item.pack,
+            packId: item.packId,
             metadata: {
               ...(item.metadata || {}),
               autoSaved: true,

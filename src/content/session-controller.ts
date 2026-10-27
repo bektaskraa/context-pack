@@ -4,7 +4,7 @@ import { StreamingDetector } from './utils/streaming-detector';
 import { AutoSaveManager } from './utils/auto-save-manager';
 import { SPANavigationWatcher } from './utils/spa-watcher';
 import { computePackHash } from './utils/hash';
-import { ContextPackData } from '../shared/types';
+import { ContextPackData, ChatPackLinkInfo } from '../shared/types';
 
 /**
  * SessionController ties together:
@@ -25,6 +25,8 @@ export class SessionController {
   private saveManager: AutoSaveManager;
   private isAutoSaveEnabled: boolean = true;
   private onStatusChange: ((msg: string, type: 'success' | 'info') => void) | null = null;
+  private onLinkChange: ((link: ChatPackLinkInfo | null) => void) | null = null;
+  private currentLinkedPack: ChatPackLinkInfo | null = null;
 
   constructor(private adapter: IPlatformAdapter) {
     this.saveManager = new AutoSaveManager();
@@ -32,6 +34,45 @@ export class SessionController {
 
   public setStatusCallback(cb: (msg: string, type: 'success' | 'info') => void): void {
     this.onStatusChange = cb;
+  }
+
+  public setLinkChangeCallback(cb: (link: ChatPackLinkInfo | null) => void): void {
+    this.onLinkChange = cb;
+  }
+
+  public setLinkedPack(link: ChatPackLinkInfo | null): void {
+    this.currentLinkedPack = link;
+    this.onLinkChange?.(link);
+  }
+
+  public getLinkedPack(): ChatPackLinkInfo | null {
+    return this.currentLinkedPack;
+  }
+
+  public async checkCurrentChatLink(): Promise<void> {
+    const chatId = this.adapter.getChatId();
+    if (!chatId) {
+      this.setLinkedPack(null);
+      return;
+    }
+
+    try {
+      const response: any = await chrome.runtime.sendMessage({
+        type: 'GET_CHAT_LINK',
+        payload: {
+          platform: this.adapter.platform,
+          externalChatId: chatId,
+        },
+      });
+
+      if (response && response.success && response.data) {
+        this.setLinkedPack(response.data);
+      } else {
+        this.setLinkedPack(null);
+      }
+    } catch {
+      this.setLinkedPack(null);
+    }
   }
 
   public setAutoSaveEnabled(enabled: boolean): void {
@@ -45,11 +86,15 @@ export class SessionController {
   }
 
   public start(): void {
+    // Check initial chat link
+    this.checkCurrentChatLink();
+
     // Start SPA navigation watcher
     this.spaWatcher = new SPANavigationWatcher(async (newUrl, oldUrl) => {
       console.log('[ContextPack] SPA navigation:', oldUrl, '→', newUrl);
       await this.saveManager.flushNow(); // Flush pending saves before switching
       this.saveManager.resetSession();
+      await this.checkCurrentChatLink();
       this.restartDetector();
     });
 
@@ -107,23 +152,29 @@ export class SessionController {
     // Compute deduplication hash
     const hash = await computePackHash(chatId, pack);
 
-    const title = this.adapter.getTitle() || 'Başlıksız Sohbet';
+    const fallbackTitle = this.adapter.getTitle() || 'Başlıksız Sohbet';
+    const effectiveTitle = this.currentLinkedPack?.title || fallbackTitle;
 
     this.saveManager.enqueue({
       platform: this.adapter.platform,
       externalChatId: chatId,
-      title,
+      title: effectiveTitle,
       pack,
+      packId: this.currentLinkedPack?.packId,
       contentHash: hash,
       metadata: {
         url: window.location.href,
         capturedAt: new Date().toISOString(),
         rawTextLength: rawText.length,
+        linkedPackId: this.currentLinkedPack?.packId,
       },
     });
 
     // Show subtle status notification
-    this.onStatusChange?.('💾 Otomatik kaydedildi', 'success');
+    const msg = this.currentLinkedPack
+      ? `💾 "${effectiveTitle}" güncellendi`
+      : '💾 Otomatik kaydedildi';
+    this.onStatusChange?.(msg, 'success');
   }
 
   private tryParsePack(rawText: string): ContextPackData {

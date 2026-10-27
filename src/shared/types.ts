@@ -51,6 +51,12 @@ export interface SupabaseConfig {
   supabaseAnonKey: string;
 }
 
+export interface ChatPackLinkInfo {
+  packId: string;
+  title: string;
+  version?: number;
+}
+
 export type ExtensionMessage =
   | {
       type: 'SAVE_PACK';
@@ -61,11 +67,35 @@ export type ExtensionMessage =
         pack: ContextPackData;
         metadata?: Record<string, unknown>;
         expectedVersion?: number;
+        packId?: string;
       };
     }
   | { type: 'LIST_PACKS' }
   | { type: 'GET_PACK'; payload: { id: string } }
   | { type: 'DELETE_PACK'; payload: { id: string } }
+  | {
+      type: 'LINK_CHAT';
+      payload: {
+        packId: string;
+        platform: PlatformType;
+        externalChatId: string;
+        packTitle?: string;
+      };
+    }
+  | {
+      type: 'UNLINK_CHAT';
+      payload: {
+        platform: PlatformType;
+        externalChatId: string;
+      };
+    }
+  | {
+      type: 'GET_CHAT_LINK';
+      payload: {
+        platform: PlatformType;
+        externalChatId: string;
+      };
+    }
   | { type: 'GET_AUTH_STATUS' }
   | { type: 'SIGN_IN'; payload: { email: string; password: string } }
   | { type: 'SIGN_UP'; payload: { email: string; password: string } }

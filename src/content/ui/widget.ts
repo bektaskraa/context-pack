@@ -13,6 +13,8 @@ export class ContextPackWidget {
   private isAwaitingSummary = false;
   private isAutoSaveActive = true;
   private autoSaveToggleCallback: ((enabled: boolean) => void) | null = null;
+  private currentLinkedPack: { packId: string; title: string; version?: number } | null = null;
+  private linkChangeCallback: ((link: { packId: string; title: string; version?: number } | null) => void) | null = null;
 
   constructor(adapter: IPlatformAdapter) {
     this.adapter = adapter;
@@ -137,6 +139,30 @@ export class ContextPackWidget {
 
         .cp-btn-auto.active:hover {
           background: #d1fae5;
+        }
+
+        .cp-btn-link-badge {
+          background: #f8fafc;
+          color: #64748b;
+          border: 1px dashed #cbd5e1;
+          max-width: 145px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .cp-btn-link-badge:hover {
+          background: #f1f5f9;
+        }
+
+        .cp-btn-link-badge.linked {
+          background: #eff6ff;
+          color: #2563eb;
+          border: 1px solid #bfdbfe;
+          font-weight: 700;
+        }
+
+        .cp-btn-link-badge.linked:hover {
+          background: #dbeafe;
         }
 
         .cp-toast {
@@ -340,6 +366,37 @@ export class ContextPackWidget {
 
         .cp-btn-copy:hover { background: #e2e8f0; }
 
+        .cp-badge-linked {
+          font-size: 10px;
+          font-weight: 700;
+          color: #059669;
+          background: #ecfdf5;
+          border: 1px solid #a7f3d0;
+          padding: 2px 7px;
+          border-radius: 12px;
+          white-space: nowrap;
+        }
+
+        .cp-btn-unlink {
+          background: #fef2f2;
+          color: #dc2626;
+          border: 1px solid #fecaca;
+          padding: 5px 10px;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        .cp-btn-unlink:hover {
+          background: #fee2e2;
+        }
+
+        .cp-pack-card.linked-card {
+          border-color: #93c5fd;
+          background: #f8faff;
+        }
+
         .cp-empty {
           text-align: center;
           color: #64748b;
@@ -359,6 +416,9 @@ export class ContextPackWidget {
       </style>
 
       <div class="cp-bar">
+        <button class="cp-btn cp-btn-link-badge" id="cp-btn-link-badge" title="Sohbet bağlantısı (değiştirmek veya bağlamak için tıklayın)">
+          ➕ Bağsız Sohbet
+        </button>
         <button class="cp-btn cp-btn-auto active" id="cp-btn-auto" title="Otomatik kaydetme açık (tıklayarak kapatın)">
           🤖 Auto: Açık
         </button>
@@ -380,10 +440,13 @@ export class ContextPackWidget {
   private bindEvents(): void {
     if (!this.shadow) return;
 
+    const linkBadgeBtn = this.shadow.getElementById('cp-btn-link-badge');
     const autoBtn = this.shadow.getElementById('cp-btn-auto');
     const packBtn = this.shadow.getElementById('cp-btn-pack');
     const saveBtn = this.shadow.getElementById('cp-btn-save');
     const loadBtn = this.shadow.getElementById('cp-btn-load');
+
+    linkBadgeBtn?.addEventListener('click', () => this.handleLoad());
 
     autoBtn?.addEventListener('click', () => {
       this.isAutoSaveActive = !this.isAutoSaveActive;
@@ -448,7 +511,7 @@ export class ContextPackWidget {
 
       const parsedPack = this.extractPackJson(lastResponse);
       const chatId = this.adapter.getChatId() || 'chat-' + Date.now();
-      const title = this.adapter.getTitle() || 'Başlıksız Sohbet';
+      const title = this.currentLinkedPack?.title || this.adapter.getTitle() || 'Başlıksız Sohbet';
 
       const response: any = await chrome.runtime.sendMessage({
         type: 'SAVE_PACK',
@@ -457,9 +520,11 @@ export class ContextPackWidget {
           externalChatId: chatId,
           title: title,
           pack: parsedPack,
+          packId: this.currentLinkedPack?.packId,
           metadata: {
             extractedAt: new Date().toISOString(),
             url: window.location.href,
+            linkedPackId: this.currentLinkedPack?.packId,
           },
         },
       });
@@ -468,7 +533,17 @@ export class ContextPackWidget {
         throw new Error(response.error || 'Bilinmeyen hata');
       }
 
-      this.toast('✅ Context Pack başarıyla Supabase\'e kaydedildi!', 'success');
+      // If this save established or updated the link
+      if (response.data?.id) {
+        this.setLinkedPack({
+          packId: response.data.id,
+          title: response.data.title || title,
+          version: response.data.version,
+        });
+        this.linkChangeCallback?.(this.currentLinkedPack);
+      }
+
+      this.toast(`✅ "${title}" başarıyla güncellendi!`, 'success');
       this.showSaveButton(false);
       this.isAwaitingSummary = false;
     } catch (err: any) {
@@ -477,7 +552,7 @@ export class ContextPackWidget {
     } finally {
       if (saveBtn) {
         saveBtn.disabled = false;
-        saveBtn.innerText = '💾 Kaydet';
+        saveBtn.innerText = this.currentLinkedPack ? '💾 Güncelle' : '💾 Kaydet';
       }
     }
   }
@@ -491,9 +566,19 @@ export class ContextPackWidget {
 
       const packs: ContextPackSummary[] = response.data || [];
       if (this.shadow) {
-        showPackSelectionModal(this.shadow, packs, this.adapter, (msg, type) => {
-          this.toast(msg, type);
-        });
+        showPackSelectionModal(
+          this.shadow,
+          packs,
+          this.adapter,
+          (msg, type) => {
+            this.toast(msg, type);
+          },
+          (link) => {
+            this.setLinkedPack(link);
+            this.linkChangeCallback?.(link);
+          },
+          this.currentLinkedPack?.packId
+        );
       }
     } catch (err: any) {
       this.toast(`Hata: ${err.message}`, 'error');
@@ -564,6 +649,37 @@ export class ContextPackWidget {
 
   public onAutoSaveToggle(cb: (enabled: boolean) => void): void {
     this.autoSaveToggleCallback = cb;
+  }
+
+  public setLinkedPack(link: { packId: string; title: string; version?: number } | null): void {
+    this.currentLinkedPack = link;
+    this.updateLinkBadgeUI();
+  }
+
+  public onLinkChange(cb: (link: { packId: string; title: string; version?: number } | null) => void): void {
+    this.linkChangeCallback = cb;
+  }
+
+  public updateLinkBadgeUI(): void {
+    const badgeBtn = this.shadow?.getElementById('cp-btn-link-badge');
+    const saveBtn = this.shadow?.getElementById('cp-btn-save') as HTMLButtonElement | null;
+    if (!badgeBtn) return;
+
+    if (this.currentLinkedPack) {
+      badgeBtn.classList.add('linked');
+      const truncated = this.currentLinkedPack.title.length > 15
+        ? this.currentLinkedPack.title.substring(0, 13) + '...'
+        : this.currentLinkedPack.title;
+      const ver = this.currentLinkedPack.version ? ` (v${this.currentLinkedPack.version})` : '';
+      badgeBtn.textContent = `🔗 ${truncated}${ver}`;
+      badgeBtn.title = `Bağlı: "${this.currentLinkedPack.title}". Değiştirmek veya bağlantıyı kesmek için tıklayın.`;
+      if (saveBtn) saveBtn.innerText = '💾 Güncelle';
+    } else {
+      badgeBtn.classList.remove('linked');
+      badgeBtn.textContent = '➕ Bağsız Sohbet';
+      badgeBtn.title = 'Bu sohbet bir pakete bağlı değil. Bir pakete bağlamak için tıklayın.';
+      if (saveBtn) saveBtn.innerText = '💾 Kaydet';
+    }
   }
 
   private updateAutoSaveButtonUI(): void {

@@ -38,6 +38,15 @@ function init(): void {
     chrome.storage.local.set({ cp_auto_save_enabled: enabled });
   });
 
+  // Two-way link synchronization between sessionController and widget
+  sessionController.setLinkChangeCallback((link) => {
+    widget.setLinkedPack(link);
+  });
+
+  widget.onLinkChange((link) => {
+    sessionController.setLinkedPack(link);
+  });
+
   // 2. Resilient Mount Guard: Re-mount if React/Vue unmounts the root host
   const hostId = 'context-pack-widget-host';
   const mountObserver = new MutationObserver(() => {

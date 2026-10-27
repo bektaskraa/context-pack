@@ -155,7 +155,7 @@ async function handleMessage(message: ExtensionMessage): Promise<unknown> {
         throw new Error('Giriş yapılmamış. Lütfen eklenti popup menüsünden giriş yapın.');
       }
 
-      const { platform, externalChatId, title, pack, metadata, expectedVersion } = message.payload;
+      const { platform, externalChatId, title, pack, metadata, expectedVersion, packId } = message.payload;
 
       // Redact sensitive credentials before sending to Supabase
       const sanitizedPack = redactObjectSecrets(pack);
@@ -168,10 +168,23 @@ async function handleMessage(message: ExtensionMessage): Promise<unknown> {
         p_pack: sanitizedPack,
         p_metadata: metadata || {},
         p_expected_version: expectedVersion ?? null,
+        p_pack_id: packId ?? null,
       });
 
       if (error) {
         throw new Error(`Paket kaydedilemedi: ${error.message}`);
+      }
+
+      // Cache the link locally for immediate lookup
+      if (data && data.id) {
+        const linkKey = `cp_link_${platform}_${externalChatId}`;
+        await chrome.storage.local.set({
+          [linkKey]: {
+            packId: data.id,
+            title: data.title || title || 'Bağlı Bağlam',
+            version: data.version,
+          },
+        });
       }
 
       return data;
@@ -236,6 +249,101 @@ async function handleMessage(message: ExtensionMessage): Promise<unknown> {
       }
 
       return { deleted: true };
+    }
+
+    case 'LINK_CHAT': {
+      const client = await getSupabaseClient();
+      const { packId, platform, externalChatId, packTitle } = message.payload;
+
+      // 1. Update local storage cache immediately
+      const linkKey = `cp_link_${platform}_${externalChatId}`;
+      await chrome.storage.local.set({
+        [linkKey]: {
+          packId,
+          title: packTitle || 'Bağlı Bağlam',
+        },
+      });
+
+      // 2. Persist to Supabase if client is ready
+      if (client) {
+        try {
+          await client.rpc('link_chat_to_pack', {
+            p_pack_id: packId,
+            p_platform: platform,
+            p_external_chat_id: externalChatId,
+          });
+        } catch (err) {
+          console.warn('[ContextPack] Failed to persist link to Supabase:', err);
+        }
+      }
+
+      return { linked: true };
+    }
+
+    case 'UNLINK_CHAT': {
+      const client = await getSupabaseClient();
+      const { platform, externalChatId } = message.payload;
+
+      // 1. Remove from local storage cache
+      const linkKey = `cp_link_${platform}_${externalChatId}`;
+      await chrome.storage.local.remove([linkKey]);
+
+      // 2. Remove from Supabase
+      if (client) {
+        try {
+          await client.rpc('unlink_chat_from_pack', {
+            p_platform: platform,
+            p_external_chat_id: externalChatId,
+          });
+        } catch (err) {
+          console.warn('[ContextPack] Failed to unlink in Supabase:', err);
+        }
+      }
+
+      return { unlinked: true };
+    }
+
+    case 'GET_CHAT_LINK': {
+      const { platform, externalChatId } = message.payload;
+      const linkKey = `cp_link_${platform}_${externalChatId}`;
+
+      // 1. Try local storage cache first
+      const stored = await chrome.storage.local.get([linkKey]);
+      if (stored[linkKey]) {
+        return stored[linkKey];
+      }
+
+      // 2. Fallback to Supabase
+      const client = await getSupabaseClient();
+      if (!client) {
+        return null;
+      }
+
+      try {
+        const { data, error } = await client
+          .from('context_pack_links')
+          .select('pack_id, context_packs(id, title, version)')
+          .eq('platform', platform)
+          .eq('external_chat_id', externalChatId)
+          .maybeSingle();
+
+        if (error || !data || !data.pack_id) {
+          return null;
+        }
+
+        const packInfo = (data as any).context_packs;
+        const result = {
+          packId: data.pack_id,
+          title: packInfo?.title || 'Bağlı Bağlam',
+          version: packInfo?.version,
+        };
+
+        // Cache for subsequent queries
+        await chrome.storage.local.set({ [linkKey]: result });
+        return result;
+      } catch {
+        return null;
+      }
     }
 
     default:

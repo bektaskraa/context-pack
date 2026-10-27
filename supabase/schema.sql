@@ -59,6 +59,20 @@ CREATE TABLE IF NOT EXISTS public.context_pack_revisions (
 );
 
 -- ----------------------------------------------------------------------------
+-- 2.1 CONTEXT_PACK_LINKS (Associates platform chats with a single Context Pack)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.context_pack_links (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+    pack_id UUID NOT NULL REFERENCES public.context_packs(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL CHECK (platform IN ('claude', 'chatgpt', 'gemini')),
+    external_chat_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+
+    CONSTRAINT uq_context_pack_links_user_platform_chat UNIQUE (user_id, platform, external_chat_id)
+);
+
+-- ----------------------------------------------------------------------------
 -- 3. INDEXES
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_context_packs_user_platform 
@@ -75,6 +89,12 @@ CREATE INDEX IF NOT EXISTS idx_context_pack_revisions_pack
 
 CREATE INDEX IF NOT EXISTS idx_context_pack_revisions_user 
     ON public.context_pack_revisions (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_context_pack_links_pack 
+    ON public.context_pack_links (pack_id);
+
+CREATE INDEX IF NOT EXISTS idx_context_pack_links_user_chat 
+    ON public.context_pack_links (user_id, platform, external_chat_id);
 
 -- ----------------------------------------------------------------------------
 -- 4. TRIGGERS & FUNCTIONS
@@ -133,15 +153,19 @@ CREATE TRIGGER tr_context_packs_archive_revision
     EXECUTE FUNCTION public.archive_context_pack_revision();
 
 -- ----------------------------------------------------------------------------
--- 5. ATOMIC UPSERT RPC (Optimistic Concurrency Control)
+-- 5. ATOMIC UPSERT RPC (Optimistic Concurrency Control + Chat Linking)
 -- ----------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.save_context_pack_atomic(TEXT, TEXT, TEXT, JSONB, JSONB, INTEGER);
+DROP FUNCTION IF EXISTS public.save_context_pack_atomic(TEXT, TEXT, TEXT, JSONB, JSONB, INTEGER, UUID);
+
 CREATE OR REPLACE FUNCTION public.save_context_pack_atomic(
     p_platform TEXT,
     p_external_chat_id TEXT,
     p_title TEXT,
     p_pack JSONB,
     p_metadata JSONB DEFAULT '{}'::jsonb,
-    p_expected_version INTEGER DEFAULT NULL
+    p_expected_version INTEGER DEFAULT NULL,
+    p_pack_id UUID DEFAULT NULL
 )
 RETURNS public.context_packs
 LANGUAGE plpgsql
@@ -152,20 +176,38 @@ DECLARE
     v_user_id UUID := (SELECT auth.uid());
     v_current_pack public.context_packs%ROWTYPE;
     v_result public.context_packs%ROWTYPE;
+    v_target_pack_id UUID := p_pack_id;
 BEGIN
     IF v_user_id IS NULL THEN
         RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '28000';
     END IF;
 
-    -- Lock the existing row if found
-    SELECT * INTO v_current_pack
-    FROM public.context_packs
-    WHERE user_id = v_user_id 
-      AND platform = p_platform 
-      AND external_chat_id = p_external_chat_id
-    FOR UPDATE;
+    -- 1. If pack ID not explicitly passed, check if this chat is already linked to a pack
+    IF v_target_pack_id IS NULL THEN
+        SELECT pack_id INTO v_target_pack_id
+        FROM public.context_pack_links
+        WHERE user_id = v_user_id
+          AND platform = p_platform
+          AND external_chat_id = p_external_chat_id;
+    END IF;
 
-    IF FOUND THEN
+    -- 2. Find target pack (either by linked ID or fallback by origin platform & chat)
+    IF v_target_pack_id IS NOT NULL THEN
+        SELECT * INTO v_current_pack
+        FROM public.context_packs
+        WHERE id = v_target_pack_id AND user_id = v_user_id
+        FOR UPDATE;
+    ELSE
+        SELECT * INTO v_current_pack
+        FROM public.context_packs
+        WHERE user_id = v_user_id 
+          AND platform = p_platform 
+          AND external_chat_id = p_external_chat_id
+        FOR UPDATE;
+    END IF;
+
+    -- 3. Update existing or insert new
+    IF v_current_pack.id IS NOT NULL THEN
         -- Check OCC version if client provided one
         IF p_expected_version IS NOT NULL AND v_current_pack.version != p_expected_version THEN
             RAISE EXCEPTION 'Version conflict: expected %, found %', 
@@ -180,6 +222,12 @@ BEGIN
             metadata = p_metadata
         WHERE id = v_current_pack.id
         RETURNING * INTO v_result;
+
+        -- Ensure this chat is recorded in links
+        INSERT INTO public.context_pack_links (user_id, pack_id, platform, external_chat_id)
+        VALUES (v_user_id, v_result.id, p_platform, p_external_chat_id)
+        ON CONFLICT (user_id, platform, external_chat_id)
+        DO UPDATE SET pack_id = EXCLUDED.pack_id;
     ELSE
         INSERT INTO public.context_packs (
             user_id,
@@ -199,9 +247,65 @@ BEGIN
             p_metadata
         )
         RETURNING * INTO v_result;
+
+        -- Auto-link the creating chat to the new pack
+        INSERT INTO public.context_pack_links (user_id, pack_id, platform, external_chat_id)
+        VALUES (v_user_id, v_result.id, p_platform, p_external_chat_id)
+        ON CONFLICT (user_id, platform, external_chat_id)
+        DO UPDATE SET pack_id = EXCLUDED.pack_id;
     END IF;
 
     RETURN v_result;
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- 5.1 CHAT LINKING RPCs
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.link_chat_to_pack(
+    p_pack_id UUID,
+    p_platform TEXT,
+    p_external_chat_id TEXT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+DECLARE
+    v_user_id UUID := (SELECT auth.uid());
+BEGIN
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '28000';
+    END IF;
+
+    INSERT INTO public.context_pack_links (user_id, pack_id, platform, external_chat_id)
+    VALUES (v_user_id, p_pack_id, p_platform, p_external_chat_id)
+    ON CONFLICT (user_id, platform, external_chat_id)
+    DO UPDATE SET pack_id = EXCLUDED.pack_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.unlink_chat_from_pack(
+    p_platform TEXT,
+    p_external_chat_id TEXT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+DECLARE
+    v_user_id UUID := (SELECT auth.uid());
+BEGIN
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '28000';
+    END IF;
+
+    DELETE FROM public.context_pack_links
+    WHERE user_id = v_user_id
+      AND platform = p_platform
+      AND external_chat_id = p_external_chat_id;
 END;
 $$;
 
@@ -213,6 +317,9 @@ ALTER TABLE public.context_packs FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE public.context_pack_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.context_pack_revisions FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE public.context_pack_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.context_pack_links FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Users can view their own context packs" ON public.context_packs;
 CREATE POLICY "Users can view their own context packs"
@@ -245,3 +352,26 @@ DROP POLICY IF EXISTS "Users cannot manually mutate revisions" ON public.context
 CREATE POLICY "Users cannot manually mutate revisions"
     ON public.context_pack_revisions FOR ALL TO authenticated
     USING (false);
+
+-- Links: Full access for own user
+DROP POLICY IF EXISTS "Users can view their own links" ON public.context_pack_links;
+CREATE POLICY "Users can view their own links"
+    ON public.context_pack_links FOR SELECT TO authenticated
+    USING (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Users can insert their own links" ON public.context_pack_links;
+CREATE POLICY "Users can insert their own links"
+    ON public.context_pack_links FOR INSERT TO authenticated
+    WITH CHECK (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Users can update their own links" ON public.context_pack_links;
+CREATE POLICY "Users can update their own links"
+    ON public.context_pack_links FOR UPDATE TO authenticated
+    USING (user_id = (SELECT auth.uid()))
+    WITH CHECK (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS "Users can delete their own links" ON public.context_pack_links;
+CREATE POLICY "Users can delete their own links"
+    ON public.context_pack_links FOR DELETE TO authenticated
+    USING (user_id = (SELECT auth.uid()));
+

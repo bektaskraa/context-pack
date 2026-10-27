@@ -45,7 +45,9 @@ export function showPackSelectionModal(
   shadowRoot: ShadowRoot,
   packs: ContextPackSummary[],
   adapter: IPlatformAdapter,
-  onNotify: (msg: string, type: 'success' | 'error' | 'warning') => void
+  onNotify: (msg: string, type: 'success' | 'error' | 'warning') => void,
+  onLinkUpdated?: (link: { packId: string; title: string; version?: number } | null) => void,
+  currentLinkedPackId?: string | null
 ): void {
   // Remove existing modal if any
   const existingModal = shadowRoot.getElementById('cp-modal-overlay');
@@ -67,6 +69,7 @@ export function showPackSelectionModal(
   const listItems = packs.length === 0
     ? `<div class="cp-empty">Kayıtlı bağlam paketi bulunamadı.<br/><small>Önce bir sohbette "📦 Paketle" ve "💾 Kaydet" yapın.</small></div>`
     : packs.map((p) => {
+        const isLinked = currentLinkedPackId === p.id;
         const dateStr = new Date(p.updated_at).toLocaleDateString('tr-TR', {
           day: '2-digit',
           month: '2-digit',
@@ -75,16 +78,26 @@ export function showPackSelectionModal(
         });
         const badgeColor = platformBadgeColor[p.platform] || '#6b7280';
         return `
-          <div class="cp-pack-card" data-id="${p.id}">
+          <div class="cp-pack-card ${isLinked ? 'linked-card' : ''}" data-id="${p.id}">
             <div class="cp-pack-header">
               <span class="cp-pack-title">${escapeHtml(p.title)}</span>
-              <span class="cp-badge" style="background-color: ${badgeColor};">${p.platform}</span>
+              <div style="display: flex; gap: 6px; align-items: center;">
+                ${isLinked ? '<span class="cp-badge-linked">🔗 Bu Sohbete Bağlı</span>' : ''}
+                <span class="cp-badge" style="background-color: ${badgeColor};">${p.platform}</span>
+              </div>
             </div>
             <div class="cp-pack-meta">
               <span>v${p.version}</span> • <span>${dateStr}</span>
             </div>
             <div class="cp-pack-actions">
-              <button class="cp-btn-inject" data-action="inject" data-id="${p.id}">📥 Prompt'a Aktar</button>
+              <button class="cp-btn-inject" data-action="inject-link" data-id="${p.id}" title="Prompt kutusuna yazar ve bu sohbeti bu pakete bağlar">
+                🔗 Aktar & Bağla
+              </button>
+              ${
+                isLinked
+                  ? `<button class="cp-btn-unlink" data-action="unlink" data-id="${p.id}" title="Bu sohbetin paketle olan bağlantısını keser">❌ Bağlantıyı Kopar</button>`
+                  : `<button class="cp-btn-copy" data-action="link-only" data-id="${p.id}" title="Metin aktarmadan yalnızca bu sohbeti bu pakete bağlar">🔗 Sadece Bağla</button>`
+              }
               <button class="cp-btn-copy" data-action="copy" data-id="${p.id}">📋 Kopyala</button>
             </div>
           </div>
@@ -100,7 +113,7 @@ export function showPackSelectionModal(
       <button class="cp-close-btn" id="cp-modal-close">&times;</button>
     </div>
     <div class="cp-modal-body">
-      <input type="text" class="cp-search-input" id="cp-modal-search" placeholder="Paketlerde ara..." />
+      <input type="text" class="cp-search-input" id="cp-modal-search" placeholder="Bağlam paketlerinde ara..." />
       <div class="cp-pack-list" id="cp-pack-list">
         ${listItems}
       </div>
@@ -128,13 +141,66 @@ export function showPackSelectionModal(
     });
   });
 
-  // Button actions (inject & copy)
+  // Button actions (inject-link, link-only, unlink, copy)
   modal.querySelectorAll('[data-action]').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       const target = e.currentTarget as HTMLElement;
       const action = target.getAttribute('data-action');
       const packId = target.getAttribute('data-id');
       if (!packId) return;
+
+      const selectedPack = packs.find((p) => p.id === packId);
+      const chatId = adapter.getChatId();
+
+      // Action: UNLINK
+      if (action === 'unlink') {
+        if (chatId) {
+          try {
+            await chrome.runtime.sendMessage({
+              type: 'UNLINK_CHAT',
+              payload: {
+                platform: adapter.platform,
+                externalChatId: chatId,
+              },
+            });
+            onLinkUpdated?.(null);
+            onNotify('🔗 Bağlantı koparıldı. Sohbet artık bağımsız.', 'warning');
+            close();
+          } catch (err: any) {
+            onNotify(`Bağlantı koparılamadı: ${err.message}`, 'error');
+          }
+        }
+        return;
+      }
+
+      // Action: LINK ONLY
+      if (action === 'link-only') {
+        if (!chatId) {
+          onNotify('⚠️ Aktif sohbet ID bulunamadı.', 'error');
+          return;
+        }
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'LINK_CHAT',
+            payload: {
+              packId,
+              platform: adapter.platform,
+              externalChatId: chatId,
+              packTitle: selectedPack?.title,
+            },
+          });
+          onLinkUpdated?.({
+            packId,
+            title: selectedPack?.title || 'Bağlı Bağlam',
+            version: selectedPack?.version,
+          });
+          onNotify(`🔗 Sohbet "${selectedPack?.title}" paketine bağlandı!`, 'success');
+          close();
+        } catch (err: any) {
+          onNotify(`Bağlanamadı: ${err.message}`, 'error');
+        }
+        return;
+      }
 
       target.innerText = 'Yükleniyor...';
 
@@ -152,14 +218,33 @@ export function showPackSelectionModal(
         const formattedMarkdown = formatPackToMarkdown(packData);
         const fullPrompt = INJECT_HEADER + formattedMarkdown;
 
-        if (action === 'inject') {
+        if (action === 'inject-link') {
           const injected = adapter.insertText(fullPrompt);
+
+          // Link chat if chatId exists
+          if (chatId) {
+            await chrome.runtime.sendMessage({
+              type: 'LINK_CHAT',
+              payload: {
+                packId,
+                platform: adapter.platform,
+                externalChatId: chatId,
+                packTitle: selectedPack?.title,
+              },
+            });
+            onLinkUpdated?.({
+              packId,
+              title: selectedPack?.title || 'Bağlı Bağlam',
+              version: selectedPack?.version,
+            });
+          }
+
           if (injected) {
-            onNotify('✅ Bağlam prompt kutusuna aktarıldı!', 'success');
+            onNotify(`✅ Bağlam aktarıldı ve "${selectedPack?.title || 'Paket'}"e bağlandı! 🔗`, 'success');
             close();
           } else {
             await copyToClipboard(fullPrompt);
-            onNotify('⚠️ Kutuya yazılamadı, panoya kopyalandı!', 'warning');
+            onNotify('⚠️ Kutuya yazılamadı, panoya kopyalandı ve bağlandı!', 'warning');
             close();
           }
         } else if (action === 'copy') {
